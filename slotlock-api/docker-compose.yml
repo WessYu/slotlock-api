@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: slotlock
+      POSTGRES_PASSWORD: slotlock
+      POSTGRES_DB: slotlock
+    ports:
+      - "5432:5432"
+    volumes:
+      - slotlock_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U slotlock -d slotlock"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  slotlock_pg:
