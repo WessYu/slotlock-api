@@ -1,8 +1,8 @@
 # SlotLock API
 
-A reservation backend designed around **concurrency, consistency, and idempotent retries**.
+A reservation backend designed around **concurrency, consistency, availability, and idempotent retries**.
 
-SlotLock is not a CRUD demo. Its core problem is preventing overbooking when multiple clients attempt to reserve the same resource at the same time.
+SlotLock is not a CRUD demo. Its core problem is preventing overbooking when multiple clients attempt to reserve the same resource at the same time while still exposing a predictable availability API.
 
 ![CI](https://github.com/WessYu/slotlock-api/actions/workflows/ci.yml/badge.svg)
 
@@ -58,9 +58,61 @@ Reservation creation also requires an `Idempotency-Key`. Repeating a successful 
 | --- | --- | --- |
 | `GET` | `/health` | API + database health check |
 | `GET` | `/v1/resources` | List reservable resources |
+| `GET` | `/v1/resources/:id/availability` | Generate availability slots for a bounded interval |
 | `POST` | `/v1/reservations` | Create a reservation |
 | `GET` | `/v1/reservations/:id` | Get a reservation |
 | `DELETE` | `/v1/reservations/:id` | Cancel a reservation |
+
+### Check availability
+
+Availability accepts an explicit time interval instead of assuming the server's local timezone.
+
+```bash
+curl "http://localhost:3333/v1/resources/RESOURCE_UUID/availability?from=2026-10-20T09%3A00%3A00-03%3A00&to=2026-10-20T12%3A00%3A00-03%3A00&slotMinutes=60"
+```
+
+Example response:
+
+```json
+{
+  "resource": {
+    "id": "RESOURCE_UUID",
+    "name": "Sala Alpha",
+    "slug": "sala-alpha"
+  },
+  "window": {
+    "from": "2026-10-20T12:00:00.000Z",
+    "to": "2026-10-20T15:00:00.000Z",
+    "slotMinutes": 60,
+    "normalizedTo": "UTC",
+    "intervalSemantics": "[start,end)"
+  },
+  "summary": {
+    "totalSlots": 3,
+    "availableSlots": 2,
+    "unavailableSlots": 1
+  },
+  "slots": [
+    {
+      "startsAt": "2026-10-20T12:00:00.000Z",
+      "endsAt": "2026-10-20T13:00:00.000Z",
+      "available": true
+    }
+  ]
+}
+```
+
+Rules:
+
+- `from` and `to` must include `Z` or an explicit offset such as `-03:00`;
+- `slotMinutes` defaults to `60` and accepts values from `15` to `240`;
+- the window is limited to 7 days;
+- the window must be evenly divisible by `slotMinutes`;
+- only `CONFIRMED` reservations block availability;
+- interval semantics are half-open: `[start, end)`, matching the database constraint;
+- output timestamps are normalized to UTC.
+
+The availability endpoint is informative, not a locking mechanism. The PostgreSQL exclusion constraint remains the source of truth when a reservation is created, so a slot becoming occupied between the availability check and the booking request cannot produce overbooking.
 
 ### Create a reservation
 
@@ -129,6 +181,7 @@ The initial migration seeds two resources: `sala-alpha` and `sala-beta`.
 npm run dev
 npm run build
 npm test
+npm run check
 npm run prisma:generate
 npm run prisma:migrate
 npm run prisma:deploy
@@ -138,6 +191,9 @@ npm run prisma:deploy
 
 **Database-enforced concurrency**  
 The API does not rely on a pre-insert availability query as its final protection. PostgreSQL owns the overlap invariant.
+
+**Availability without timezone ambiguity**  
+Clients must send absolute instants with `Z` or an explicit UTC offset. Slot output is normalized to UTC and uses the same half-open interval semantics as PostgreSQL.
 
 **Serializable reservation transaction**  
 Resource validation and reservation creation execute inside a serializable Prisma transaction.
@@ -150,7 +206,7 @@ A unique idempotency key prevents duplicate reservations caused by client retrie
 
 ## CI
 
-GitHub Actions starts a real PostgreSQL service, applies the Prisma migration, compiles the TypeScript project, and runs the concurrency test on every push and pull request.
+GitHub Actions starts a real PostgreSQL service, applies the Prisma migration, compiles the TypeScript project, and runs the concurrency and availability tests on every push and pull request.
 
 ## Roadmap
 
@@ -159,7 +215,7 @@ GitHub Actions starts a real PostgreSQL service, applies the Prisma migration, c
 - [x] Cancellation flow
 - [x] 20-request concurrency test
 - [x] CI with PostgreSQL
-- [ ] Availability endpoint with explicit timezone handling
+- [x] Availability endpoint with explicit timezone handling
 - [ ] Authentication + RBAC
 - [ ] Rescheduling flow
 - [ ] Redis-backed distributed rate limiting and availability cache
