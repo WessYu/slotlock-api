@@ -2,7 +2,6 @@ import { z } from 'zod';
 
 export const createReservationSchema = z.object({
   resourceId: z.string().uuid(),
-  customerEmail: z.string().email(),
   startsAt: z.coerce.date(),
   endsAt: z.coerce.date(),
 }).superRefine((value, ctx) => {

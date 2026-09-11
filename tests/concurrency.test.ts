@@ -4,19 +4,52 @@ import { prisma } from '../src/lib/prisma.js';
 
 const app = await buildApp();
 let resourceId: string;
+let accessToken: string;
+let userId: string;
 
 beforeAll(async () => {
   await app.ready();
-  await prisma.reservation.deleteMany();
-  await prisma.resource.deleteMany({ where: { slug: 'concorrencia-test' } });
+
+  await prisma.resource.deleteMany({
+    where: { slug: 'concorrencia-test' },
+  });
+
+  await prisma.user.deleteMany({
+    where: { email: 'concurrency-user@example.com' },
+  });
+
+  const register = await app.inject({
+    method: 'POST',
+    url: '/v1/auth/register',
+    payload: {
+      name: 'Concurrency User',
+      email: 'concurrency-user@example.com',
+      password: 'Concurrency-Test-Password-2026',
+    },
+  });
+
+  expect(register.statusCode).toBe(201);
+
+  const auth = register.json();
+  accessToken = auth.accessToken;
+  userId = auth.user.id;
 
   const resource = await prisma.resource.create({
     data: { name: 'Concorrência Test', slug: 'concorrencia-test' },
   });
+
   resourceId = resource.id;
 });
 
 afterAll(async () => {
+  await prisma.resource.deleteMany({
+    where: { id: resourceId },
+  });
+
+  await prisma.user.deleteMany({
+    where: { id: userId },
+  });
+
   await app.close();
   await prisma.$disconnect();
 });
@@ -28,12 +61,12 @@ describe('reservation concurrency', () => {
         method: 'POST',
         url: '/v1/reservations',
         headers: {
+          authorization: `Bearer ${accessToken}`,
           'content-type': 'application/json',
           'idempotency-key': `concurrency-${Date.now()}-${index}`,
         },
         payload: {
           resourceId,
-          customerEmail: `candidate-${index}@example.com`,
           startsAt: '2026-10-10T14:00:00.000Z',
           endsAt: '2026-10-10T15:00:00.000Z',
         },
@@ -48,8 +81,13 @@ describe('reservation concurrency', () => {
     expect(conflicts).toHaveLength(19);
 
     const confirmedCount = await prisma.reservation.count({
-      where: { resourceId, status: 'CONFIRMED' },
+      where: {
+        resourceId,
+        userId,
+        status: 'CONFIRMED',
+      },
     });
+
     expect(confirmedCount).toBe(1);
   });
 });
